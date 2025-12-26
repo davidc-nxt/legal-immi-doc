@@ -191,7 +191,63 @@ Queries the legal knowledge base using RAG (Retrieval Augmented Generation).
 
 ---
 
-### 4. Request Consultation
+### 4. Chat History
+
+**GET** `/.netlify/functions/chat-history`
+
+Retrieves the user's past chat interactions with pagination.
+
+**🔒 Requires Authentication**
+
+#### Query Parameters
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| limit | number | 50 | Max items to return (max 100) |
+| offset | number | 0 | Items to skip for pagination |
+
+#### Example Request
+```bash
+curl -X GET "https://legal-immi-doc.netlify.app/.netlify/functions/chat-history?limit=10&offset=0" \
+  -H "Authorization: Bearer <token>"
+```
+
+#### Success Response (200)
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "id": 5,
+      "query": "What is R205(a)?",
+      "answer": {
+        "summary": "R205(a) is the regulatory authority...",
+        "keyPoints": ["..."],
+        "confidence": "high"
+      },
+      "sources": [...],
+      "model": "google/gemini-3-flash-preview",
+      "responseTimeMs": 6842,
+      "createdAt": "2025-12-26T03:57:08.123Z"
+    }
+  ],
+  "pagination": {
+    "total": 25,
+    "limit": 10,
+    "offset": 0,
+    "hasMore": true
+  }
+}
+```
+
+#### Error Responses
+| Status | Error | Description |
+|--------|-------|-------------|
+| 401 | Unauthorized | Missing/invalid token |
+| 500 | Failed to retrieve chat history | Server error |
+
+---
+
+### 5. Request Consultation
 
 **POST** `/.netlify/functions/request-consultation`
 
