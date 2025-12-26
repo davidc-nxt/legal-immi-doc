@@ -180,25 +180,28 @@ exports.handler = async (event) => {
 
         if (results.length === 0) {
             const responseTime = Date.now() - startTime;
+            const modelName = "google/gemini-3-flash-preview";
 
+            // Standard format response for no results
             const noResultsAnswer = {
                 summary: "I couldn't find sufficient information in my knowledge base to fully answer your question.",
                 keyPoints: [],
                 legalReferences: [],
+                details: "The knowledge base does not contain documents that match your query with sufficient relevance. This may be because your question is outside the scope of C11 work permits, immigration policy, or the specific legal documents available.",
                 recommendation: "For complex or specific legal questions, I recommend consulting with our professional legal team who can provide personalized guidance.",
                 confidence: "low"
             };
 
-            // Save assistant response
+            // Save assistant response to messages
             await sql`
-                INSERT INTO messages (conversation_id, role, content)
-                VALUES (${currentConversationId}, 'assistant', ${JSON.stringify(noResultsAnswer)})
+                INSERT INTO messages (conversation_id, role, content, sources)
+                VALUES (${currentConversationId}, 'assistant', ${JSON.stringify(noResultsAnswer)}, ${JSON.stringify([])})
             `;
 
-            // Log interaction
+            // Log full interaction to interactions table
             await sql`
                 INSERT INTO interactions (user_id, query, answer, sources, model, response_time_ms)
-                VALUES (${user.userId}, ${query}, ${"No relevant information found"}, ${JSON.stringify([])}, ${"google/gemini-3-flash-preview"}, ${responseTime})
+                VALUES (${user.userId}, ${query}, ${JSON.stringify(noResultsAnswer)}, ${JSON.stringify([])}, ${modelName}, ${responseTime})
             `;
 
             return {
@@ -214,6 +217,7 @@ exports.handler = async (event) => {
                     metadata: {
                         query,
                         rewrittenQuery: standaloneQuery !== query ? standaloneQuery : null,
+                        model: modelName,
                         responseTimeMs: responseTime,
                         documentsFound: 0,
                         conversationLength: conversationHistory.length + 1
