@@ -354,7 +354,13 @@ Remember to respond with ONLY the JSON structure specified.`
         // 12. Strip [Source X] citations from API response (keep clean for mobile app)
         const stripSourceCitations = (text) => {
             if (!text) return text;
-            return text.replace(/\s*\[Source\s*\d+\]/gi, '').replace(/\s*\[Sources?\s*[\d,\s]+\]/gi, '').trim();
+            return text
+                .replace(/\s*\[Source\s*\d+(?:\s*,\s*Source\s*\d+)*\]/gi, '')  // [Source 1, Source 5]
+                .replace(/\s*\[Sources?\s*[\d,\s]+\]/gi, '')                    // [Source 1, 2, 3]
+                .replace(/\s*\[Source\s*\d+\]/gi, '')                           // [Source 1]
+                .replace(/\s+([.,])/g, '$1')                                    // Fix spacing before punctuation
+                .replace(/\s{2,}/g, ' ')                                        // Remove double spaces
+                .trim();
         };
 
         const cleanAnswer = {
