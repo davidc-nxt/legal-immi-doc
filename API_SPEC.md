@@ -123,6 +123,7 @@ Queries the legal knowledge base using RAG (Retrieval Augmented Generation). Sup
 ```json
 {
   "success": true,
+  "conversationId": "uuid-for-conversation-session",
   "data": {
     "summary": "Concise 2-3 sentence summary of the answer",
     "keyPoints": [
@@ -146,27 +147,26 @@ Queries the legal knowledge base using RAG (Retrieval Augmented Generation). Sup
       "section": "Processing Legal Frame",
       "similarity": "0.598",
       "type": "policy_document"
-    },
-    {
-      "id": 2,
-      "filename": "2024 FC 1445 _ Fahimi v. Canada.pdf",
-      "section": "Case Laws",
-      "similarity": "0.560",
-      "type": "case_law"
     }
   ],
+  "consultationAvailable": false,
+  "consultationPrompt": null,
   "metadata": {
     "query": "What are the requirements for a C11 work permit?",
+    "rewrittenQuery": null,
     "model": "google/gemini-3-flash-preview",
     "responseTimeMs": 6167,
-    "documentsFound": 8
+    "documentsFound": 8,
+    "conversationLength": 3
   }
 }
 ```
 
+
 | Field | Type | Description |
 |-------|------|-------------|
 | success | boolean | Request success status |
+| **conversationId** | UUID | Session ID - pass back to continue conversation |
 | data.summary | string | Brief 2-3 sentence answer |
 | data.keyPoints | string[] | Bullet points of key information |
 | data.legalReferences | string[] | Relevant legal codes/sections |
@@ -182,9 +182,11 @@ Queries the legal knowledge base using RAG (Retrieval Augmented Generation). Sup
 | **consultationAvailable** | boolean | True if professional consultation is recommended |
 | **consultationPrompt** | string/null | Message to show user about consultation option |
 | metadata.query | string | Original query |
+| **metadata.rewrittenQuery** | string/null | Standalone query if rewritten from context |
 | metadata.model | string | LLM model used |
 | metadata.responseTimeMs | number | Response time in milliseconds |
 | metadata.documentsFound | number | Number of relevant documents |
+| **metadata.conversationLength** | number | Number of messages in conversation |
 
 #### Error Responses
 | Status | Error | Description |
