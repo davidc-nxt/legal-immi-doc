@@ -1,7 +1,7 @@
 const { neon } = require("@neondatabase/serverless");
 const jwt = require("jsonwebtoken");
 
-const SLIDING_WINDOW_SIZE = 6; // Last 6 messages for context
+const SLIDING_WINDOW_SIZE = 10; // Last 10 messages for context (5 Q&A pairs)
 
 // Verify JWT token
 function verifyToken(authHeader) {
