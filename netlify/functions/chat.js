@@ -336,17 +336,31 @@ Remember to respond with ONLY the JSON structure specified.`
 
         const responseTime = Date.now() - startTime;
 
-        // 10. SAVE ASSISTANT MESSAGE to conversation
+        // 10. SAVE ASSISTANT MESSAGE to conversation (with source citations)
         await sql`
             INSERT INTO messages (conversation_id, role, content, sources)
             VALUES (${currentConversationId}, 'assistant', ${JSON.stringify(structuredAnswer)}, ${JSON.stringify(sources)})
         `;
 
-        // 11. Log interaction for analytics
+        // 11. Log interaction for analytics (with source citations)
         await sql`
             INSERT INTO interactions (user_id, query, answer, sources, model, response_time_ms)
             VALUES (${user.userId}, ${query}, ${JSON.stringify(structuredAnswer)}, ${JSON.stringify(sources)}, ${modelName}, ${responseTime})
         `;
+
+        // 12. Strip [Source X] citations from API response (keep clean for mobile app)
+        const stripSourceCitations = (text) => {
+            if (!text) return text;
+            return text.replace(/\s*\[Source\s*\d+\]/gi, '').replace(/\s*\[Sources?\s*[\d,\s]+\]/gi, '').trim();
+        };
+
+        const cleanAnswer = {
+            ...structuredAnswer,
+            summary: stripSourceCitations(structuredAnswer.summary),
+            details: stripSourceCitations(structuredAnswer.details),
+            recommendation: stripSourceCitations(structuredAnswer.recommendation),
+            keyPoints: (structuredAnswer.keyPoints || []).map(stripSourceCitations)
+        };
 
         // Determine if consultation should be offered
         const confidence = structuredAnswer.confidence || "medium";
@@ -358,7 +372,7 @@ Remember to respond with ONLY the JSON structure specified.`
             body: JSON.stringify({
                 success: true,
                 conversationId: currentConversationId,
-                data: structuredAnswer,
+                data: cleanAnswer,
                 sources,
                 consultationAvailable: offerConsultation,
                 consultationPrompt: offerConsultation
