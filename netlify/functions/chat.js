@@ -112,13 +112,15 @@ exports.handler = async (event) => {
                 body: JSON.stringify({
                     success: true,
                     data: {
-                        summary: "No relevant information found in the knowledge base.",
+                        summary: "I couldn't find sufficient information in my knowledge base to fully answer your question.",
                         keyPoints: [],
                         legalReferences: [],
-                        recommendation: "Please try rephrasing your question or ask about C11 work permits, immigration policy, or case law.",
+                        recommendation: "For complex or specific legal questions, I recommend consulting with our professional legal team who can provide personalized guidance.",
                         confidence: "low"
                     },
                     sources: [],
+                    consultationAvailable: true,
+                    consultationPrompt: "Would you like to speak with a legal professional? We can connect you with an immigration lawyer who specializes in C11 work permits. Please note that professional consultation fees may apply.",
                     metadata: {
                         query,
                         responseTimeMs: responseTime,
@@ -231,6 +233,10 @@ Remember to respond with ONLY the JSON structure specified.`
             VALUES (${user.userId}, ${query}, ${JSON.stringify(structuredAnswer)}, ${JSON.stringify(sources)}, ${modelName}, ${responseTime})
         `;
 
+        // Determine if consultation should be offered
+        const confidence = structuredAnswer.confidence || "medium";
+        const offerConsultation = confidence === "low" || confidence === "medium";
+
         return {
             statusCode: 200,
             headers,
@@ -238,6 +244,10 @@ Remember to respond with ONLY the JSON structure specified.`
                 success: true,
                 data: structuredAnswer,
                 sources,
+                consultationAvailable: offerConsultation,
+                consultationPrompt: offerConsultation
+                    ? "Need more detailed guidance? Connect with our legal team for personalized consultation. Professional fees may apply."
+                    : null,
                 metadata: {
                     query,
                     model: modelName,

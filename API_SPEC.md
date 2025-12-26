@@ -160,8 +160,6 @@ Queries the legal knowledge base using RAG (Retrieval Augmented Generation).
 }
 ```
 
-#### Response Fields
-
 | Field | Type | Description |
 |-------|------|-------------|
 | success | boolean | Request success status |
@@ -177,6 +175,8 @@ Queries the legal knowledge base using RAG (Retrieval Augmented Generation).
 | sources[].section | string | Category: "Case Laws", "ATIP Notes", "Processing Legal Frame" |
 | sources[].similarity | string | Similarity score (0-1) |
 | sources[].type | string | "case_law", "atip_note", or "policy_document" |
+| **consultationAvailable** | boolean | True if professional consultation is recommended |
+| **consultationPrompt** | string/null | Message to show user about consultation option |
 | metadata.query | string | Original query |
 | metadata.model | string | LLM model used |
 | metadata.responseTimeMs | number | Response time in milliseconds |
@@ -188,6 +188,66 @@ Queries the legal knowledge base using RAG (Retrieval Augmented Generation).
 | 400 | Query is required | Missing query |
 | 401 | Unauthorized | Missing/invalid token |
 | 500 | Failed to generate response | LLM error |
+
+---
+
+### 4. Request Consultation
+
+**POST** `/.netlify/functions/request-consultation`
+
+Submits a consultation request to connect with a professional immigration lawyer. Sends case summary via email.
+
+**🔒 Requires Authentication**
+
+#### Request Body
+```json
+{
+  "contactEmail": "user@example.com",
+  "contactPhone": "+1-555-123-4567",
+  "originalQuery": "What are the requirements for C11 work permit?",
+  "chatHistory": [
+    {
+      "role": "user",
+      "content": "What are the requirements for C11 work permit?"
+    },
+    {
+      "role": "assistant",
+      "data": {
+        "summary": "A C11 work permit requires...",
+        "keyPoints": ["Point 1", "Point 2"],
+        "confidence": "medium"
+      }
+    }
+  ],
+  "additionalNotes": "I have specific questions about my business plan."
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| contactEmail | string | Yes | Email for lawyer to contact |
+| contactPhone | string | Yes | Phone for lawyer to contact |
+| originalQuery | string | No | The initial question asked |
+| chatHistory | array | Yes | Array of chat messages |
+| additionalNotes | string | No | Extra context from user |
+
+#### Success Response (200)
+```json
+{
+  "success": true,
+  "message": "Your consultation request has been submitted. Our legal team will contact you within 1-2 business days.",
+  "consultationId": 1,
+  "feeNotice": "Please note that professional legal consultation may incur fees. Our team will discuss pricing before any chargeable work begins."
+}
+```
+
+#### Error Responses
+| Status | Error | Description |
+|--------|-------|-------------|
+| 400 | Contact email and phone are required | Missing contact info |
+| 400 | Chat history is required | Missing chat history |
+| 401 | Unauthorized | Missing/invalid token |
+| 500 | Failed to submit consultation request | Server error |
 
 ---
 

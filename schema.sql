@@ -44,3 +44,22 @@ CREATE TABLE IF NOT EXISTS interactions (
 -- 7. Indexes for analytics queries
 CREATE INDEX IF NOT EXISTS interactions_user_idx ON interactions (user_id);
 CREATE INDEX IF NOT EXISTS interactions_created_idx ON interactions (created_at);
+
+-- 8. Consultations table for professional consultation requests
+CREATE TABLE IF NOT EXISTS consultations (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER REFERENCES users(id),
+  contact_email TEXT NOT NULL,
+  contact_phone TEXT NOT NULL,
+  original_query TEXT,
+  chat_history JSONB,
+  additional_notes TEXT,
+  status TEXT DEFAULT 'pending',
+  email_sent BOOLEAN DEFAULT false,
+  email_id TEXT,
+  created_at TIMESTAMP DEFAULT NOW()
+);
+
+-- 9. Indexes for consultations
+CREATE INDEX IF NOT EXISTS consultations_user_idx ON consultations (user_id);
+CREATE INDEX IF NOT EXISTS consultations_status_idx ON consultations (status);
