@@ -218,7 +218,74 @@ Queries the legal knowledge base using RAG (Retrieval Augmented Generation). Sup
 
 ---
 
-### 4. Chat History
+### 4. Conversation
+
+**GET** `/.netlify/functions/conversation`
+
+Retrieves conversation messages or lists all user's conversations.
+
+**🔒 Requires Authentication**
+
+#### List All Conversations (no `id` parameter)
+```bash
+curl -X GET "https://legal-immi-doc.netlify.app/.netlify/functions/conversation" \
+  -H "Authorization: Bearer <token>"
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "conversations": [
+    {
+      "id": "uuid-xxx",
+      "firstQuery": "What is a C11 work permit?",
+      "messageCount": 6,
+      "createdAt": "2025-12-26T..."
+    }
+  ]
+}
+```
+
+#### Get Messages for Specific Conversation
+```bash
+curl -X GET "https://legal-immi-doc.netlify.app/.netlify/functions/conversation?id=uuid-xxx" \
+  -H "Authorization: Bearer <token>"
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "conversationId": "uuid-xxx",
+  "messageCount": 6,
+  "messages": [
+    {
+      "role": "user",
+      "content": "What is a C11 work permit?",
+      "sources": [],
+      "createdAt": "2025-12-26T..."
+    },
+    {
+      "role": "assistant",
+      "content": { "summary": "...", "keyPoints": [...], ... },
+      "sources": [{ "filename": "...", ... }],
+      "createdAt": "2025-12-26T..."
+    }
+  ]
+}
+```
+
+#### Error Responses
+| Status | Error | Description |
+|--------|-------|-------------|
+| 401 | Unauthorized | Missing/invalid token |
+| 404 | Conversation not found | Invalid conversationId or not owned by user |
+
+---
+
+### 5. Chat History
+
 
 **GET** `/.netlify/functions/chat-history`
 
