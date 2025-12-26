@@ -92,8 +92,9 @@ exports.handler = async (event) => {
       SELECT content, filename, section,
              1 - (embedding <=> ${JSON.stringify(queryVector)}::vector) as similarity
       FROM documents
+      WHERE 1 - (embedding <=> ${JSON.stringify(queryVector)}::vector) > 0.4
       ORDER BY embedding <=> ${JSON.stringify(queryVector)}::vector
-      LIMIT 5
+      LIMIT 8
     `;
 
         if (results.length === 0) {
@@ -126,7 +127,7 @@ exports.handler = async (event) => {
                 "Content-Type": "application/json",
             },
             body: JSON.stringify({
-                model: "google/gemini-2.0-flash-001",
+                model: "google/gemini-3-flash-preview",
                 stream: false,
                 messages: [
                     {
@@ -154,7 +155,7 @@ ${context}
 Provide a professional, well-structured answer with source citations.`,
                     },
                 ],
-                temperature: 0.3,
+                temperature: 0.1,
                 max_tokens: 2000,
             }),
         });
