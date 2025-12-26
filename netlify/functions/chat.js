@@ -38,7 +38,7 @@ async function rewriteQueryWithHistory(query, history, apiKey) {
                 "Content-Type": "application/json"
             },
             body: JSON.stringify({
-                model: "openai/gpt-4o-mini", // Fast & cheap for query rewriting
+                model: "x-ai/grok-4.1-fast", // Lower cost for simple query rewriting
                 messages: [
                     {
                         role: "system",
