@@ -16,14 +16,14 @@ function verifyToken(authHeader) {
 }
 
 exports.handler = async (event) => {
+    const startTime = Date.now();
+
     // CORS headers
     const headers = {
         "Access-Control-Allow-Origin": "*",
         "Access-Control-Allow-Headers": "Content-Type, Authorization",
         "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Content-Type": "text/event-stream",
-        "Cache-Control": "no-cache",
-        "Connection": "keep-alive",
+        "Content-Type": "application/json",
     };
 
     if (event.httpMethod === "OPTIONS") {
@@ -33,7 +33,7 @@ exports.handler = async (event) => {
     if (event.httpMethod !== "POST") {
         return {
             statusCode: 405,
-            headers: { ...headers, "Content-Type": "application/json" },
+            headers,
             body: JSON.stringify({ error: "Method not allowed" }),
         };
     }
@@ -43,7 +43,7 @@ exports.handler = async (event) => {
     if (!user) {
         return {
             statusCode: 401,
-            headers: { ...headers, "Content-Type": "application/json" },
+            headers,
             body: JSON.stringify({ error: "Unauthorized" }),
         };
     }
@@ -54,7 +54,7 @@ exports.handler = async (event) => {
         if (!query || query.trim() === "") {
             return {
                 statusCode: 400,
-                headers: { ...headers, "Content-Type": "application/json" },
+                headers,
                 body: JSON.stringify({ error: "Query is required" }),
             };
         }
@@ -77,7 +77,7 @@ exports.handler = async (event) => {
             console.error("Embedding error:", errorText);
             return {
                 statusCode: 500,
-                headers: { ...headers, "Content-Type": "application/json" },
+                headers,
                 body: JSON.stringify({ error: "Failed to generate embedding" }),
             };
         }
@@ -98,12 +98,32 @@ exports.handler = async (event) => {
     `;
 
         if (results.length === 0) {
+            const responseTime = Date.now() - startTime;
+
+            // Log interaction even for no results
+            await sql`
+                INSERT INTO interactions (user_id, query, answer, sources, model, response_time_ms)
+                VALUES (${user.userId}, ${query}, ${"No relevant information found"}, ${JSON.stringify([])}, ${"google/gemini-3-flash-preview"}, ${responseTime})
+            `;
+
             return {
                 statusCode: 200,
-                headers: { ...headers, "Content-Type": "application/json" },
+                headers,
                 body: JSON.stringify({
-                    answer: "I don't have any relevant information in my knowledge base to answer this question. Please make sure the knowledge base has been populated with documents.",
+                    success: true,
+                    data: {
+                        summary: "No relevant information found in the knowledge base.",
+                        keyPoints: [],
+                        legalReferences: [],
+                        recommendation: "Please try rephrasing your question or ask about C11 work permits, immigration policy, or case law.",
+                        confidence: "low"
+                    },
                     sources: [],
+                    metadata: {
+                        query,
+                        responseTimeMs: responseTime,
+                        documentsFound: 0
+                    }
                 }),
             };
         }
@@ -113,13 +133,17 @@ exports.handler = async (event) => {
             .map((r, i) => `[Source ${i + 1}] ${r.filename} (${r.section}):\n${r.content}`)
             .join("\n\n---\n\n");
 
-        const sources = results.map((r) => ({
+        const sources = results.map((r, i) => ({
+            id: i + 1,
             filename: r.filename,
             section: r.section,
             similarity: parseFloat(r.similarity).toFixed(3),
+            type: r.section === "Case Laws" ? "case_law" :
+                r.section === "ATIP Notes" ? "atip_note" : "policy_document"
         }));
 
-        // 4. Generate answer using LLM
+        // 4. Generate answer using LLM with structured output
+        const modelName = "google/gemini-3-flash-preview";
         const chatResponse = await fetch("https://openrouter.ai/api/v1/chat/completions", {
             method: "POST",
             headers: {
@@ -127,32 +151,40 @@ exports.handler = async (event) => {
                 "Content-Type": "application/json",
             },
             body: JSON.stringify({
-                model: "google/gemini-3-flash-preview",
+                model: modelName,
                 stream: false,
                 messages: [
                     {
                         role: "system",
-                        content: `You are a professional legal assistant specializing in Canadian immigration law, particularly work permits and C11 applications. 
+                        content: `You are a professional legal assistant specializing in Canadian immigration law, particularly work permits and C11 applications.
 
-Your role is to:
-1. Answer questions based ONLY on the provided context from official legal documents
-2. Be precise and cite specific sources when possible
-3. If the context doesn't contain enough information, clearly state that
-4. Use professional but accessible language
-5. Structure your answers clearly with key points
+Your response MUST be in the following JSON format:
+{
+  "summary": "A concise 2-3 sentence summary of the answer",
+  "keyPoints": ["Array of key points, each as a clear bullet point"],
+  "legalReferences": ["Array of relevant legal references (e.g., 'R205(a)', 'IRPR Section 200')"],
+  "details": "Detailed explanation with source citations using [Source X] notation",
+  "recommendation": "Practical recommendation or next steps for the user",
+  "confidence": "high/medium/low based on how well the sources answer the question"
+}
 
-Always reference the source documents in your answer using [Source X] notation.`,
+Rules:
+1. Answer ONLY based on the provided context
+2. Always cite sources using [Source X] notation
+3. Be precise with legal terminology
+4. If information is incomplete, state it clearly
+5. Return ONLY valid JSON, no additional text`
                     },
                     {
                         role: "user",
-                        content: `Based on the following legal documents, please answer this question:
+                        content: `Based on the following legal documents, answer this question:
 
 QUESTION: ${query}
 
 CONTEXT FROM LEGAL DOCUMENTS:
 ${context}
 
-Provide a professional, well-structured answer with source citations.`,
+Remember to respond with ONLY the JSON structure specified.`
                     },
                 ],
                 temperature: 0.1,
@@ -165,28 +197,60 @@ Provide a professional, well-structured answer with source citations.`,
             console.error("Chat error:", errorText);
             return {
                 statusCode: 500,
-                headers: { ...headers, "Content-Type": "application/json" },
+                headers,
                 body: JSON.stringify({ error: "Failed to generate response" }),
             };
         }
 
         const chatData = await chatResponse.json();
-        const answer = chatData.choices[0].message.content;
+        const rawAnswer = chatData.choices[0].message.content;
+
+        // Parse the structured response
+        let structuredAnswer;
+        try {
+            // Remove markdown code blocks if present
+            const cleanJson = rawAnswer.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+            structuredAnswer = JSON.parse(cleanJson);
+        } catch (parseError) {
+            // Fallback if LLM doesn't return valid JSON
+            structuredAnswer = {
+                summary: rawAnswer.substring(0, 200),
+                keyPoints: [],
+                legalReferences: [],
+                details: rawAnswer,
+                recommendation: "",
+                confidence: "medium"
+            };
+        }
+
+        const responseTime = Date.now() - startTime;
+
+        // 5. Log interaction to database for analytics
+        await sql`
+            INSERT INTO interactions (user_id, query, answer, sources, model, response_time_ms)
+            VALUES (${user.userId}, ${query}, ${JSON.stringify(structuredAnswer)}, ${JSON.stringify(sources)}, ${modelName}, ${responseTime})
+        `;
 
         return {
             statusCode: 200,
-            headers: { ...headers, "Content-Type": "application/json" },
+            headers,
             body: JSON.stringify({
-                answer,
+                success: true,
+                data: structuredAnswer,
                 sources,
-                query,
+                metadata: {
+                    query,
+                    model: modelName,
+                    responseTimeMs: responseTime,
+                    documentsFound: sources.length
+                }
             }),
         };
     } catch (error) {
         console.error("Chat error:", error);
         return {
             statusCode: 500,
-            headers: { ...headers, "Content-Type": "application/json" },
+            headers,
             body: JSON.stringify({ error: "Internal server error" }),
         };
     }

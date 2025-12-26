@@ -28,3 +28,19 @@ CREATE TABLE IF NOT EXISTS users (
 
 -- 5. Index for faster email lookups
 CREATE INDEX IF NOT EXISTS users_email_idx ON users (email);
+
+-- 6. Interactions table for tracking user-LLM conversations
+CREATE TABLE IF NOT EXISTS interactions (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER REFERENCES users(id),
+  query TEXT NOT NULL,
+  answer TEXT,
+  sources JSONB,
+  model TEXT,
+  response_time_ms INTEGER,
+  created_at TIMESTAMP DEFAULT NOW()
+);
+
+-- 7. Indexes for analytics queries
+CREATE INDEX IF NOT EXISTS interactions_user_idx ON interactions (user_id);
+CREATE INDEX IF NOT EXISTS interactions_created_idx ON interactions (created_at);
