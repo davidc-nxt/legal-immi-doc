@@ -100,20 +100,24 @@ Authenticates user and returns a JWT token.
 
 **POST** `/.netlify/functions/chat`
 
-Queries the legal knowledge base using RAG (Retrieval Augmented Generation).
+Queries the legal knowledge base using RAG (Retrieval Augmented Generation). Supports **conversation sessions** with sliding window memory (last 6 messages).
 
 **🔒 Requires Authentication**
 
 #### Request Body
 ```json
 {
-  "query": "What are the requirements for a C11 work permit?"
+  "query": "What are the requirements for a C11 work permit?",
+  "conversationId": "optional-uuid-from-previous-response"
 }
 ```
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | query | string | Yes | Legal question |
+| conversationId | UUID | No | Pass from previous response to continue conversation |
+
+> **Note**: For follow-up questions like "What does that mean?", pass the `conversationId` from the previous response. The system will automatically rewrite vague questions using conversation context.
 
 #### Success Response (200)
 ```json

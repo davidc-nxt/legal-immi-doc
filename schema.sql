@@ -63,3 +63,24 @@ CREATE TABLE IF NOT EXISTS consultations (
 -- 9. Indexes for consultations
 CREATE INDEX IF NOT EXISTS consultations_user_idx ON consultations (user_id);
 CREATE INDEX IF NOT EXISTS consultations_status_idx ON consultations (status);
+
+-- 10. Conversations table for chat sessions
+CREATE TABLE IF NOT EXISTS conversations (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id INTEGER REFERENCES users(id),
+  created_at TIMESTAMP DEFAULT NOW()
+);
+
+-- 11. Messages table for conversation history (sliding window)
+CREATE TABLE IF NOT EXISTS messages (
+  id SERIAL PRIMARY KEY,
+  conversation_id UUID REFERENCES conversations(id),
+  role TEXT CHECK (role IN ('user', 'assistant')),
+  content TEXT NOT NULL,
+  sources JSONB,
+  created_at TIMESTAMP DEFAULT NOW()
+);
+
+-- 12. Indexes for fast message retrieval
+CREATE INDEX IF NOT EXISTS idx_messages_conversation_id ON messages(conversation_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_conversations_user_id ON conversations(user_id);

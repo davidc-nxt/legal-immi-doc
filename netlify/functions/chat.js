@@ -1,17 +1,63 @@
 const { neon } = require("@neondatabase/serverless");
 const jwt = require("jsonwebtoken");
 
+const SLIDING_WINDOW_SIZE = 6; // Last 6 messages for context
+
 // Verify JWT token
 function verifyToken(authHeader) {
     if (!authHeader || !authHeader.startsWith("Bearer ")) {
         return null;
     }
-
     const token = authHeader.substring(7);
     try {
         return jwt.verify(token, process.env.JWT_SECRET);
     } catch {
         return null;
+    }
+}
+
+// Rewrite vague follow-up questions using conversation history
+async function rewriteQueryWithHistory(query, history, apiKey) {
+    if (history.length === 0) return query;
+
+    // Check if query seems like a follow-up (short, contains pronouns like "it", "that", "this")
+    const followUpIndicators = /^(what|how|why|can|is|are|does|do|tell|explain).{0,20}(it|that|this|they|them|those|the same)/i;
+    const isShortQuery = query.split(' ').length < 8;
+
+    if (!followUpIndicators.test(query) && !isShortQuery) {
+        return query; // Seems standalone, no rewrite needed
+    }
+
+    const historyText = history.map(m => `${m.role}: ${m.content.substring(0, 200)}`).join("\n");
+
+    try {
+        const resp = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+            method: "POST",
+            headers: {
+                "Authorization": `Bearer ${apiKey}`,
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+                model: "openai/gpt-4o-mini", // Fast & cheap for query rewriting
+                messages: [
+                    {
+                        role: "system",
+                        content: "Rewrite the user's question to be standalone based on the conversation history. If the question is already clear and standalone, return it unchanged. Output ONLY the rewritten question, nothing else."
+                    },
+                    {
+                        role: "user",
+                        content: `CONVERSATION HISTORY:\n${historyText}\n\nUSER'S QUESTION: ${query}\n\nRewritten standalone question:`
+                    }
+                ],
+                max_tokens: 150,
+                temperature: 0.1
+            })
+        });
+        const data = await resp.json();
+        return data.choices?.[0]?.message?.content?.trim() || query;
+    } catch (error) {
+        console.error("Query rewrite error:", error);
+        return query; // Fallback to original
     }
 }
 
@@ -49,7 +95,7 @@ exports.handler = async (event) => {
     }
 
     try {
-        const { query } = JSON.parse(event.body);
+        const { query, conversationId } = JSON.parse(event.body);
 
         if (!query || query.trim() === "") {
             return {
@@ -59,7 +105,38 @@ exports.handler = async (event) => {
             };
         }
 
-        // 1. Generate embedding for user query
+        const sql = neon(process.env.DATABASE_URL);
+
+        // 1. MANAGE CONVERSATION SESSION
+        let currentConversationId = conversationId;
+
+        if (!currentConversationId) {
+            // Create new conversation
+            const convResult = await sql`
+                INSERT INTO conversations (user_id) VALUES (${user.userId}) 
+                RETURNING id
+            `;
+            currentConversationId = convResult[0].id;
+        }
+
+        // 2. LOAD CONVERSATION HISTORY (Sliding Window: Last 6 messages)
+        const historyResult = await sql`
+            SELECT role, content FROM messages 
+            WHERE conversation_id = ${currentConversationId}
+            ORDER BY created_at DESC 
+            LIMIT ${SLIDING_WINDOW_SIZE}
+        `;
+        // Reverse to chronological order (oldest -> newest)
+        const conversationHistory = historyResult.reverse();
+
+        // 3. REWRITE QUERY if it seems like a follow-up
+        const standaloneQuery = await rewriteQueryWithHistory(
+            query,
+            conversationHistory,
+            process.env.OPENROUTER_API_KEY
+        );
+
+        // 4. Generate embedding for the (possibly rewritten) query
         const embeddingResponse = await fetch("https://openrouter.ai/api/v1/embeddings", {
             method: "POST",
             headers: {
@@ -68,7 +145,7 @@ exports.handler = async (event) => {
             },
             body: JSON.stringify({
                 model: "openai/text-embedding-3-small",
-                input: query,
+                input: standaloneQuery,
             }),
         });
 
@@ -85,22 +162,40 @@ exports.handler = async (event) => {
         const embeddingData = await embeddingResponse.json();
         const queryVector = embeddingData.data[0].embedding;
 
-        // 2. Vector search in Neon
-        const sql = neon(process.env.DATABASE_URL);
-
+        // 5. Vector search in Neon
         const results = await sql`
-      SELECT content, filename, section,
-             1 - (embedding <=> ${JSON.stringify(queryVector)}::vector) as similarity
-      FROM documents
-      WHERE 1 - (embedding <=> ${JSON.stringify(queryVector)}::vector) > 0.4
-      ORDER BY embedding <=> ${JSON.stringify(queryVector)}::vector
-      LIMIT 8
-    `;
+            SELECT content, filename, section,
+                   1 - (embedding <=> ${JSON.stringify(queryVector)}::vector) as similarity
+            FROM documents
+            WHERE 1 - (embedding <=> ${JSON.stringify(queryVector)}::vector) > 0.4
+            ORDER BY embedding <=> ${JSON.stringify(queryVector)}::vector
+            LIMIT 8
+        `;
+
+        // 6. SAVE USER MESSAGE to conversation
+        await sql`
+            INSERT INTO messages (conversation_id, role, content)
+            VALUES (${currentConversationId}, 'user', ${query})
+        `;
 
         if (results.length === 0) {
             const responseTime = Date.now() - startTime;
 
-            // Log interaction even for no results
+            const noResultsAnswer = {
+                summary: "I couldn't find sufficient information in my knowledge base to fully answer your question.",
+                keyPoints: [],
+                legalReferences: [],
+                recommendation: "For complex or specific legal questions, I recommend consulting with our professional legal team who can provide personalized guidance.",
+                confidence: "low"
+            };
+
+            // Save assistant response
+            await sql`
+                INSERT INTO messages (conversation_id, role, content)
+                VALUES (${currentConversationId}, 'assistant', ${JSON.stringify(noResultsAnswer)})
+            `;
+
+            // Log interaction
             await sql`
                 INSERT INTO interactions (user_id, query, answer, sources, model, response_time_ms)
                 VALUES (${user.userId}, ${query}, ${"No relevant information found"}, ${JSON.stringify([])}, ${"google/gemini-3-flash-preview"}, ${responseTime})
@@ -111,26 +206,23 @@ exports.handler = async (event) => {
                 headers,
                 body: JSON.stringify({
                     success: true,
-                    data: {
-                        summary: "I couldn't find sufficient information in my knowledge base to fully answer your question.",
-                        keyPoints: [],
-                        legalReferences: [],
-                        recommendation: "For complex or specific legal questions, I recommend consulting with our professional legal team who can provide personalized guidance.",
-                        confidence: "low"
-                    },
+                    conversationId: currentConversationId,
+                    data: noResultsAnswer,
                     sources: [],
                     consultationAvailable: true,
                     consultationPrompt: "Would you like to speak with a legal professional? We can connect you with an immigration lawyer who specializes in C11 work permits. Please note that professional consultation fees may apply.",
                     metadata: {
                         query,
+                        rewrittenQuery: standaloneQuery !== query ? standaloneQuery : null,
                         responseTimeMs: responseTime,
-                        documentsFound: 0
+                        documentsFound: 0,
+                        conversationLength: conversationHistory.length + 1
                     }
                 }),
             };
         }
 
-        // 3. Build context from search results
+        // 7. Build context from search results
         const context = results
             .map((r, i) => `[Source ${i + 1}] ${r.filename} (${r.section}):\n${r.content}`)
             .join("\n\n---\n\n");
@@ -144,21 +236,11 @@ exports.handler = async (event) => {
                 r.section === "ATIP Notes" ? "atip_note" : "policy_document"
         }));
 
-        // 4. Generate answer using LLM with structured output
-        const modelName = "google/gemini-3-flash-preview";
-        const chatResponse = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-            method: "POST",
-            headers: {
-                "Authorization": `Bearer ${process.env.OPENROUTER_API_KEY}`,
-                "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-                model: modelName,
-                stream: false,
-                messages: [
-                    {
-                        role: "system",
-                        content: `You are a professional legal assistant specializing in Canadian immigration law, particularly work permits and C11 applications.
+        // 8. Build messages array with sliding window history
+        const llmMessages = [
+            {
+                role: "system",
+                content: `You are a professional legal assistant specializing in Canadian immigration law, particularly work permits and C11 applications.
 
 Your response MUST be in the following JSON format:
 {
@@ -176,10 +258,23 @@ Rules:
 3. Be precise with legal terminology
 4. If information is incomplete, state it clearly
 5. Return ONLY valid JSON, no additional text`
-                    },
-                    {
-                        role: "user",
-                        content: `Based on the following legal documents, answer this question:
+            }
+        ];
+
+        // Add conversation history (sliding window)
+        for (const msg of conversationHistory) {
+            llmMessages.push({
+                role: msg.role,
+                content: typeof msg.content === 'string' && msg.content.startsWith('{')
+                    ? JSON.parse(msg.content).summary || msg.content
+                    : msg.content
+            });
+        }
+
+        // Add current query with context
+        llmMessages.push({
+            role: "user",
+            content: `Based on the following legal documents, answer this question:
 
 QUESTION: ${query}
 
@@ -187,8 +282,20 @@ CONTEXT FROM LEGAL DOCUMENTS:
 ${context}
 
 Remember to respond with ONLY the JSON structure specified.`
-                    },
-                ],
+        });
+
+        // 9. Generate answer using LLM
+        const modelName = "google/gemini-3-flash-preview";
+        const chatResponse = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+            method: "POST",
+            headers: {
+                "Authorization": `Bearer ${process.env.OPENROUTER_API_KEY}`,
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+                model: modelName,
+                stream: false,
+                messages: llmMessages,
                 temperature: 0.1,
                 max_tokens: 2000,
             }),
@@ -210,11 +317,9 @@ Remember to respond with ONLY the JSON structure specified.`
         // Parse the structured response
         let structuredAnswer;
         try {
-            // Remove markdown code blocks if present
             const cleanJson = rawAnswer.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
             structuredAnswer = JSON.parse(cleanJson);
         } catch (parseError) {
-            // Fallback if LLM doesn't return valid JSON
             structuredAnswer = {
                 summary: rawAnswer.substring(0, 200),
                 keyPoints: [],
@@ -227,7 +332,13 @@ Remember to respond with ONLY the JSON structure specified.`
 
         const responseTime = Date.now() - startTime;
 
-        // 5. Log interaction to database for analytics
+        // 10. SAVE ASSISTANT MESSAGE to conversation
+        await sql`
+            INSERT INTO messages (conversation_id, role, content, sources)
+            VALUES (${currentConversationId}, 'assistant', ${JSON.stringify(structuredAnswer)}, ${JSON.stringify(sources)})
+        `;
+
+        // 11. Log interaction for analytics
         await sql`
             INSERT INTO interactions (user_id, query, answer, sources, model, response_time_ms)
             VALUES (${user.userId}, ${query}, ${JSON.stringify(structuredAnswer)}, ${JSON.stringify(sources)}, ${modelName}, ${responseTime})
@@ -242,6 +353,7 @@ Remember to respond with ONLY the JSON structure specified.`
             headers,
             body: JSON.stringify({
                 success: true,
+                conversationId: currentConversationId,
                 data: structuredAnswer,
                 sources,
                 consultationAvailable: offerConsultation,
@@ -250,9 +362,11 @@ Remember to respond with ONLY the JSON structure specified.`
                     : null,
                 metadata: {
                     query,
+                    rewrittenQuery: standaloneQuery !== query ? standaloneQuery : null,
                     model: modelName,
                     responseTimeMs: responseTime,
-                    documentsFound: sources.length
+                    documentsFound: sources.length,
+                    conversationLength: conversationHistory.length + 1
                 }
             }),
         };
