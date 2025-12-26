@@ -38,9 +38,22 @@ exports.handler = async (event) => {
     }
 
     try {
-        const { contactEmail, contactPhone, chatHistory, originalQuery, additionalNotes } = JSON.parse(event.body);
+        const { contactEmail, contactPhone, chatHistory, originalQuery, additionalNotes, feeAcknowledged } = JSON.parse(event.body);
 
-        // Validation
+        // Validation - must acknowledge fees first
+        if (!feeAcknowledged) {
+            return {
+                statusCode: 400,
+                headers,
+                body: JSON.stringify({
+                    error: "Fee acknowledgment required",
+                    requiresAcknowledgment: true,
+                    feeDisclosure: "Professional legal consultation may incur fees. By proceeding, you acknowledge that fees may apply and our team will discuss pricing before any chargeable work begins.",
+                    action: "Please set feeAcknowledged to true to confirm you understand fees may apply."
+                }),
+            };
+        }
+
         if (!contactEmail || !contactPhone) {
             return {
                 statusCode: 400,
@@ -136,7 +149,7 @@ exports.handler = async (event) => {
         
         <div class="footer">
             <p>This consultation request was submitted on ${new Date(consultation.created_at).toLocaleString()}.</p>
-            <p>The client has been notified that a fee may apply for professional consultation.</p>
+            <p><strong>✅ The client has acknowledged that professional consultation fees may apply.</strong></p>
         </div>
     </div>
 </body>

@@ -204,6 +204,7 @@ Submits a consultation request to connect with a professional immigration lawyer
 {
   "contactEmail": "user@example.com",
   "contactPhone": "+1-555-123-4567",
+  "feeAcknowledged": true,
   "originalQuery": "What are the requirements for C11 work permit?",
   "chatHistory": [
     {
@@ -227,6 +228,7 @@ Submits a consultation request to connect with a professional immigration lawyer
 |-------|------|----------|-------------|
 | contactEmail | string | Yes | Email for lawyer to contact |
 | contactPhone | string | Yes | Phone for lawyer to contact |
+| **feeAcknowledged** | boolean | **Yes** | Must be `true` to confirm user acknowledges fees may apply |
 | originalQuery | string | No | The initial question asked |
 | chatHistory | array | Yes | Array of chat messages |
 | additionalNotes | string | No | Extra context from user |
@@ -241,9 +243,21 @@ Submits a consultation request to connect with a professional immigration lawyer
 }
 ```
 
+#### Fee Acknowledgment Required Response (400)
+If `feeAcknowledged` is not `true`:
+```json
+{
+  "error": "Fee acknowledgment required",
+  "requiresAcknowledgment": true,
+  "feeDisclosure": "Professional legal consultation may incur fees...",
+  "action": "Please set feeAcknowledged to true to confirm you understand fees may apply."
+}
+```
+
 #### Error Responses
 | Status | Error | Description |
 |--------|-------|-------------|
+| 400 | Fee acknowledgment required | User must acknowledge fees |
 | 400 | Contact email and phone are required | Missing contact info |
 | 400 | Chat history is required | Missing chat history |
 | 401 | Unauthorized | Missing/invalid token |
