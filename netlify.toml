@@ -1,0 +1,9 @@
+[build]
+  publish = "."
+  functions = "netlify/functions"
+
+[functions]
+  node_bundler = "esbuild"
+
+# Environment variables (set in Netlify UI)
+# DATABASE_URL, OPENROUTER_API_KEY, JWT_SECRET

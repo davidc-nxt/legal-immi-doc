@@ -1,0 +1,280 @@
+This is excellent. Since you have your **LlamaCloud API Key** ready and your files are parsed (or ready to be parsed by the API), we can now execute the final "Data Movement" phase: taking that clean legal text from LlamaCloud and storing it in **Neon** so your Netlify app can search it.
+
+Here is your complete **End-to-End Guide** and scripts.
+
+### Phase 1: Database Setup (Neon)
+
+Before running any code, we need to prepare the destination.
+
+1. Log in to your **Neon Console**.
+2. Go to **SQL Editor**.
+3. Run this SQL to create your vector store:
+
+```sql
+-- 1. Enable vector support
+CREATE EXTENSION IF NOT EXISTS vector;
+
+-- 2. Create the table for legal clauses
+-- We use 1536 dimensions to match the OpenAI/OpenRouter model we will use.
+CREATE TABLE documents (
+  id SERIAL PRIMARY KEY,
+  filename TEXT,
+  section TEXT,
+  content TEXT,
+  embedding vector(1536)
+);
+
+-- 3. Create a search index (Makes it fast)
+CREATE INDEX ON documents USING hnsw (embedding vector_cosine_ops);
+
+```
+
+4. **Get your connection string:** Go to **Dashboard**  **Connection Details**. Keep this safe.
+
+---
+
+### Phase 2: The Ingestion Script (Python)
+
+This script moves data from **PDF  LlamaParse  Neon**.
+
+**Project Setup:**
+Create a folder `legal-poc` and a file named `.env`:
+
+```env
+# .env
+DATABASE_URL="postgres://[YOUR_NEON_USER]:[PASS]@[HOST]/neondb?sslmode=require"
+LLAMA_CLOUD_API_KEY="llx-..."
+OPENROUTER_API_KEY="sk-or-..."
+
+```
+
+**Install Dependencies:**
+
+```bash
+pip install psycopg2-binary openai llama-parse python-dotenv langchain-text-splitters
+
+```
+
+**The Script (`ingest.py`):**
+*Note: This script assumes your PDFs are in a local folder named `documents/`. Even if you uploaded them to LlamaCloud UI, running this script ensures we fetch the Markdown in the exact format we need for the database.*
+
+```python
+import os
+import glob
+import psycopg2
+import nest_asyncio
+from dotenv import load_dotenv
+from llama_parse import LlamaParse
+from openai import OpenAI
+from langchain_text_splitters import MarkdownHeaderTextSplitter, RecursiveCharacterTextSplitter
+
+# Fix for asyncio loops in some environments
+nest_asyncio.apply()
+load_dotenv()
+
+# CONFIG
+FILES_DIR = "./documents"
+EMBEDDING_MODEL = "text-embedding-3-small"
+
+# 1. SETUP CLIENTS
+# OpenRouter (acts as OpenAI)
+client = OpenAI(
+    base_url="https://openrouter.ai/api/v1",
+    api_key=os.getenv("OPENROUTER_API_KEY"),
+)
+
+# LlamaParse
+parser = LlamaParse(
+    api_key=os.getenv("LLAMA_CLOUD_API_KEY"),
+    result_type="markdown",  # Vital for legal structure
+    verbose=True
+)
+
+# Neon Database
+conn = psycopg2.connect(os.getenv("DATABASE_URL"))
+cursor = conn.cursor()
+
+def get_embedding(text):
+    """Get vector from OpenRouter"""
+    text = text.replace("\n", " ")
+    resp = client.embeddings.create(input=[text], model=EMBEDDING_MODEL)
+    return resp.data[0].embedding
+
+def process_and_upload():
+    # 1. Get Files
+    pdf_files = glob.glob(os.path.join(FILES_DIR, "*.pdf"))
+    if not pdf_files:
+        print("❌ No PDFs found in ./documents folder")
+        return
+
+    print(f"🚀 Found {len(pdf_files)} PDFs. Starting ingestion...")
+
+    for file_path in pdf_files:
+        print(f"\n📄 Parsing: {os.path.basename(file_path)}...")
+        
+        # 2. Extract Markdown via LlamaCloud
+        # This sends the file to your LlamaCloud account to be parsed
+        documents = parser.load_data(file_path)
+        full_markdown = documents[0].text
+
+        # 3. Smart Chunking (Preserve Headers)
+        headers_to_split_on = [
+            ("#", "Header 1"),
+            ("##", "Header 2"), 
+            ("###", "Header 3")
+        ]
+        markdown_splitter = MarkdownHeaderTextSplitter(headers_to_split_on=headers_to_split_on)
+        md_header_splits = markdown_splitter.split_text(full_markdown)
+
+        # Secondary split for size
+        text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+        final_chunks = text_splitter.split_documents(md_header_splits)
+
+        print(f"   ✂️  Split into {len(final_chunks)} chunks. Embedding & Saving...")
+
+        # 4. Save to Neon
+        for chunk in final_chunks:
+            content = chunk.page_content
+            # Create a "breadcrumb" of sections (e.g., "Contract > Section 5")
+            section_path = " > ".join(str(v) for v in chunk.metadata.values()) if chunk.metadata else "General"
+            
+            # Generate Vector
+            vector = get_embedding(content)
+
+            # Insert Row
+            cursor.execute(
+                "INSERT INTO documents (filename, section, content, embedding) VALUES (%s, %s, %s, %s)",
+                (os.path.basename(file_path), section_path, content, vector)
+            )
+        
+        conn.commit()
+        print(f"   ✅ Saved {os.path.basename(file_path)}")
+
+    cursor.close()
+    conn.close()
+    print("\n🎉 All documents ingested into Neon!")
+
+if __name__ == "__main__":
+    process_and_upload()
+
+```
+
+---
+
+### Phase 3: The API (Netlify Edge Function)
+
+This is the brain that connects your Frontend, Neon, and the LLM.
+
+**1. File Structure:**
+Ensure your project looks like this:
+
+```
+/legal-poc
+├── netlify.toml
+├── index.html
+├── ingest.py
+└── netlify
+    └── edge-functions
+        └── legal-api.ts
+
+```
+
+**2. `netlify.toml` (Config):**
+
+```toml
+[build]
+  publish = "."
+
+[[edge_functions]]
+  function = "legal-api"
+  path = "/api/chat"
+
+```
+
+**3. `netlify/edge-functions/legal-api.ts` (The Logic):**
+*No `npm install` needed here; Netlify Edge imports directly from URLs.*
+
+```typescript
+import { Client } from "https://esm.sh/@neondatabase/serverless";
+
+export default async (req: Request) => {
+  // CORS: Allow your frontend to call this
+  if (req.method === "OPTIONS") {
+    return new Response("ok", { headers: { "Access-Control-Allow-Origin": "*" } });
+  }
+
+  if (req.method !== "POST") return new Response("Method Not Allowed", { status: 405 });
+
+  try {
+    const { query } = await req.json();
+
+    // 1. EMBED USER QUERY (OpenRouter)
+    const embeddingResp = await fetch("https://openrouter.ai/api/v1/embeddings", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${Deno.env.get("OPENROUTER_API_KEY")}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        model: "openai/text-embedding-3-small",
+        input: query
+      })
+    });
+    const embeddingJson = await embeddingResp.json();
+    const vector = embeddingJson.data[0].embedding;
+
+    // 2. SEARCH NEON (Vector Search)
+    const client = new Client(Deno.env.get("DATABASE_URL"));
+    await client.connect();
+
+    // The <=> operator is Cosine Distance. We want the closest (lowest distance).
+    const { rows } = await client.query(`
+      SELECT content, filename, section 
+      FROM documents 
+      ORDER BY embedding <=> $1::vector 
+      LIMIT 5
+    `, [JSON.stringify(vector)]);
+
+    // 3. BUILD CONTEXT
+    const context = rows.map(r => 
+      `SOURCE: ${r.filename} (Section: ${r.section})\nCONTENT: ${r.content}`
+    ).join("\n\n---\n\n");
+
+    // 4. GENERATE ANSWER (Stream from OpenRouter)
+    const chatResp = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${Deno.env.get("OPENROUTER_API_KEY")}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "anthropic/claude-3.5-sonnet", // High accuracy legal model
+        stream: true,
+        messages: [
+          { 
+            role: "system", 
+            content: "You are a legal assistant. Answer the user question strictly based on the provided CONTEXT. Always cite the SOURCE and SECTION path in your answer." 
+          },
+          { 
+            role: "user", 
+            content: `CONTEXT:\n${context}\n\nQUESTION: ${query}` 
+          }
+        ]
+      })
+    });
+
+    // Pipe the stream to the frontend
+    return new Response(chatResp.body, {
+      headers: { 
+        "Content-Type": "text/event-stream", 
+        "Access-Control-Allow-Origin": "*" 
+      }
+    });
+
+  } catch (err) {
+    return new Response(JSON.stringify({ error: err.message }), { status: 500 });
+  }
+};
+
+```
+
