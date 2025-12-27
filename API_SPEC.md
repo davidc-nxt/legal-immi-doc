@@ -286,22 +286,21 @@ curl -X GET "https://legal-immi-doc.netlify.app/.netlify/functions/conversation?
 
 ### 5. Chat History
 
-
 **GET** `/.netlify/functions/chat-history`
 
-Retrieves the user's past chat interactions with pagination.
+Retrieves the user's past conversations **grouped by conversationId** with all messages included.
 
 **🔒 Requires Authentication**
 
 #### Query Parameters
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| limit | number | 50 | Max items to return (max 100) |
-| offset | number | 0 | Items to skip for pagination |
+| limit | number | 20 | Max conversations to return (max 50) |
+| offset | number | 0 | Conversations to skip for pagination |
 
 #### Example Request
 ```bash
-curl -X GET "https://legal-immi-doc.netlify.app/.netlify/functions/chat-history?limit=10&offset=0" \
+curl -X GET "https://legal-immi-doc.netlify.app/.netlify/functions/chat-history?limit=10" \
   -H "Authorization: Bearer <token>"
 ```
 
@@ -309,26 +308,37 @@ curl -X GET "https://legal-immi-doc.netlify.app/.netlify/functions/chat-history?
 ```json
 {
   "success": true,
-  "data": [
+  "conversations": [
     {
-      "id": 5,
-      "query": "What is R205(a)?",
-      "answer": {
-        "summary": "R205(a) is the regulatory authority...",
-        "keyPoints": ["..."],
-        "confidence": "high"
-      },
-      "sources": [...],
-      "model": "google/gemini-3-flash-preview",
-      "responseTimeMs": 6842,
-      "createdAt": "2025-12-26T03:57:08.123Z"
+      "conversationId": "uuid-xxx",
+      "firstQuery": "What is a C11 work permit?",
+      "messageCount": 4,
+      "startedAt": "2025-12-26T03:57:08.123Z",
+      "messages": [
+        {
+          "role": "user",
+          "content": "What is a C11 work permit?",
+          "sources": [],
+          "createdAt": "2025-12-26T03:57:08.123Z"
+        },
+        {
+          "role": "assistant",
+          "content": {
+            "summary": "A C11 is an LMIA-exempt work permit...",
+            "keyPoints": ["..."],
+            "confidence": "high"
+          },
+          "sources": [{ "filename": "...", ... }],
+          "createdAt": "2025-12-26T03:57:15.456Z"
+        }
+      ]
     }
   ],
   "pagination": {
-    "total": 25,
+    "total": 5,
     "limit": 10,
     "offset": 0,
-    "hasMore": true
+    "hasMore": false
   }
 }
 ```
