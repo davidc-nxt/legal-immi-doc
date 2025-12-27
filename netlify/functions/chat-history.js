@@ -41,49 +41,76 @@ exports.handler = async (event) => {
 
         // Parse query parameters
         const params = event.queryStringParameters || {};
-        const limit = Math.min(parseInt(params.limit) || 50, 100); // Max 100
+        const limit = Math.min(parseInt(params.limit) || 20, 50); // Limit conversations, not messages
         const offset = parseInt(params.offset) || 0;
 
-        // Get user's chat history
-        const interactions = await sql`
+        // Get user's conversations with their messages grouped
+        const conversations = await sql`
             SELECT 
-                id,
-                query,
-                answer,
-                sources,
-                model,
-                response_time_ms,
-                created_at
-            FROM interactions 
-            WHERE user_id = ${user.userId}
-            ORDER BY created_at DESC
+                c.id as conversation_id,
+                c.created_at as conversation_started,
+                (
+                    SELECT json_agg(
+                        json_build_object(
+                            'role', m.role,
+                            'content', m.content,
+                            'sources', m.sources,
+                            'createdAt', m.created_at
+                        ) ORDER BY m.created_at ASC
+                    )
+                    FROM messages m 
+                    WHERE m.conversation_id = c.id
+                ) as messages,
+                (SELECT content FROM messages WHERE conversation_id = c.id AND role = 'user' ORDER BY created_at LIMIT 1) as first_query,
+                (SELECT COUNT(*) FROM messages WHERE conversation_id = c.id) as message_count
+            FROM conversations c
+            WHERE c.user_id = ${user.userId}
+            ORDER BY c.created_at DESC
             LIMIT ${limit}
             OFFSET ${offset}
         `;
 
-        // Get total count
+        // Get total count of conversations
         const countResult = await sql`
-            SELECT COUNT(*) as total FROM interactions WHERE user_id = ${user.userId}
+            SELECT COUNT(*) as total FROM conversations WHERE user_id = ${user.userId}
         `;
         const total = parseInt(countResult[0].total);
 
-        // Format response
-        const history = interactions.map(i => ({
-            id: i.id,
-            query: i.query,
-            answer: typeof i.answer === 'string' ? JSON.parse(i.answer) : i.answer,
-            sources: i.sources || [],
-            model: i.model,
-            responseTimeMs: i.response_time_ms,
-            createdAt: i.created_at
-        }));
+        // Format response - group messages within each conversation
+        const history = conversations.map(conv => {
+            // Parse messages content
+            const messages = (conv.messages || []).map(msg => {
+                let parsedContent = msg.content;
+                try {
+                    if (typeof msg.content === 'string' && msg.content.startsWith('{')) {
+                        parsedContent = JSON.parse(msg.content);
+                    }
+                } catch (e) {
+                    // Keep as string
+                }
+                return {
+                    role: msg.role,
+                    content: parsedContent,
+                    sources: msg.sources || [],
+                    createdAt: msg.createdAt
+                };
+            });
+
+            return {
+                conversationId: conv.conversation_id,
+                firstQuery: conv.first_query,
+                messageCount: parseInt(conv.message_count),
+                startedAt: conv.conversation_started,
+                messages: messages
+            };
+        });
 
         return {
             statusCode: 200,
             headers,
             body: JSON.stringify({
                 success: true,
-                data: history,
+                conversations: history,
                 pagination: {
                     total,
                     limit,
