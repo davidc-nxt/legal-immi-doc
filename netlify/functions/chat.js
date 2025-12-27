@@ -180,7 +180,7 @@ exports.handler = async (event) => {
 
         if (results.length === 0) {
             const responseTime = Date.now() - startTime;
-            const modelName = "google/gemini-3-flash-preview";
+            const modelName = "x-ai/grok-4.1-fast";
 
             // Standard format response for no results
             const noResultsAnswer = {
@@ -294,8 +294,8 @@ ${context}
 Remember to respond with ONLY the JSON structure specified.`
         });
 
-        // 9. Generate answer using LLM
-        const modelName = "google/gemini-3-flash-preview";
+        // 9. Generate answer using LLM with reasoning
+        const modelName = "x-ai/grok-4.1-fast";
         const chatResponse = await fetch("https://openrouter.ai/api/v1/chat/completions", {
             method: "POST",
             headers: {
@@ -306,6 +306,7 @@ Remember to respond with ONLY the JSON structure specified.`
                 model: modelName,
                 stream: false,
                 messages: llmMessages,
+                reasoning: { enabled: true },
                 temperature: 0.1,
                 max_tokens: 2000,
             }),
