@@ -1,92 +1,87 @@
-# Legal Immigration POC - Knowledge Base API
+# Legal Immigration Knowledge Base API
 
-A RAG-based legal Q&A API for Canadian immigration law using:
-- **Netlify Functions** - Serverless API endpoints
-- **Neon PostgreSQL** - Vector database with pgvector
-- **OpenRouter** - LLM (Gemini) and embeddings
-- **LlamaCloud** - Document parsing
+An AI-powered legal knowledge system for Canadian immigration law using **RAG (Retrieval-Augmented Generation)** with reasoning capabilities.
 
-## Setup
+## 🏗️ Architecture
 
-### 1. Database Setup
+See [ARCHITECTURE.md](./ARCHITECTURE.md) for detailed system design.
 
-Run the SQL in `schema.sql` in your Neon SQL Editor to create:
-- `documents` table with vector embeddings
-- `users` table for JWT authentication
+```
+Mobile App → Netlify Functions → Neon pgvector + Grok LLM + Resend Email
+```
 
-### 2. Environment Variables
+### Key Components
+- **RAG Pipeline**: 54 legal PDFs → 1,989 vector embeddings → semantic search
+- **LLM with Reasoning**: Grok 4.1-fast with explicit reasoning chain
+- **Conversation Memory**: Sliding window (10 messages) with query rewriting
+- **Professional Handoff**: LLM-generated case summaries for lawyers
 
-Copy `.env.example` to `.env` and fill in:
-- `DATABASE_URL` - Neon connection string
-- `LLAMA_CLOUD_API_KEY` - LlamaCloud API key
-- `OPENROUTER_API_KEY` - OpenRouter API key
-- `JWT_SECRET` - Secret for JWT signing
-
-### 3. Install Dependencies
+## 🚀 Quick Start
 
 ```bash
-# Node.js (for Netlify Functions)
+# Install dependencies
 npm install
-
-# Python (for ingestion script)
 pip install -r requirements.txt
-```
 
-### 4. Ingest Documents
+# Set up environment
+cp .env.example .env
+# Edit .env with your API keys
 
-```bash
+# Ingest documents
 python ingest.py
-```
 
-### 5. Local Development
-
-```bash
+# Run locally
 npm run dev
-# API available at http://localhost:8888
 ```
 
-## API Endpoints
+## 📚 API Documentation
 
-### Authentication
+See [API_SPEC.md](./API_SPEC.md) for complete endpoint documentation.
 
-#### POST /api/auth/register
-```json
-{
-  "email": "user@example.com",
-  "password": "password123",
-  "name": "John Doe"
-}
+### Endpoints
+| Endpoint | Description |
+|----------|-------------|
+| `POST /auth-register` | Create account |
+| `POST /auth-login` | Get JWT token |
+| `POST /chat` | Legal Q&A with RAG |
+| `GET /chat-history` | Grouped conversations |
+| `GET /conversation` | Load conversation messages |
+| `POST /request-consultation` | Professional handoff |
+
+## 🔧 Tech Stack
+
+| Component | Technology |
+|-----------|------------|
+| **API** | Netlify Functions (Node.js) |
+| **Database** | Neon PostgreSQL + pgvector |
+| **LLM** | Grok 4.1-fast via OpenRouter |
+| **Embeddings** | text-embedding-3-small |
+| **Email** | Resend API |
+| **Auth** | JWT + bcryptjs |
+
+## 📁 Project Structure
+
+```
+├── netlify/functions/     # Serverless API endpoints
+│   ├── chat.js           # RAG + LLM reasoning
+│   ├── chat-history.js   # Grouped conversations
+│   ├── conversation.js   # Load messages
+│   └── request-consultation.js
+├── ingest.py             # Document ingestion script
+├── schema.sql            # Database schema
+├── ARCHITECTURE.md       # System design
+└── API_SPEC.md          # API documentation
 ```
 
-#### POST /api/auth/login
-```json
-{
-  "email": "user@example.com",
-  "password": "password123"
-}
-```
+## 🚀 Deployment
 
-### Chat (Protected)
+1. Push to GitHub
+2. Connect to Netlify
+3. Set environment variables in Netlify UI
+4. Deploy!
 
-#### POST /api/chat
-Headers: `Authorization: Bearer <token>`
-```json
-{
-  "query": "What is a C11 work permit?"
-}
-```
+**Live Demo**: https://legal-immi-doc.netlify.app
 
-Response:
-```json
-{
-  "answer": "A C11 work permit is...",
-  "sources": [
-    {"filename": "...", "section": "...", "similarity": "0.85"}
-  ],
-  "query": "..."
-}
-```
+## 📄 License
 
-## Deployment
-
-Push to GitHub and connect to Netlify. Set environment variables in Netlify UI.
+MIT
