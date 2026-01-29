@@ -1,6 +1,6 @@
 # API Test Cases
 
-**Base URL**: `https://legal-immi-doc.netlify.app`  
+**Base URL**: `https://your-site.netlify.app`  
 **Test Date**: 2025-12-26
 
 ## Test Summary
@@ -22,7 +22,7 @@
 **Endpoint**: `POST /.netlify/functions/auth-register`
 
 ```bash
-curl -X POST https://legal-immi-doc.netlify.app/.netlify/functions/auth-register \
+curl -X POST https://your-site.netlify.app/.netlify/functions/auth-register \
   -H "Content-Type: application/json" \
   -d '{"email":"testuser@example.com","password":"test123","name":"Test User"}'
 ```
@@ -49,7 +49,7 @@ curl -X POST https://legal-immi-doc.netlify.app/.netlify/functions/auth-register
 **Endpoint**: `POST /.netlify/functions/auth-login`
 
 ```bash
-curl -X POST https://legal-immi-doc.netlify.app/.netlify/functions/auth-login \
+curl -X POST https://your-site.netlify.app/.netlify/functions/auth-login \
   -H "Content-Type: application/json" \
   -d '{"email":"testuser@example.com","password":"test123"}'
 ```
@@ -76,7 +76,7 @@ curl -X POST https://legal-immi-doc.netlify.app/.netlify/functions/auth-login \
 **Endpoint**: `POST /.netlify/functions/chat`
 
 ```bash
-curl -X POST https://legal-immi-doc.netlify.app/.netlify/functions/chat \
+curl -X POST https://your-site.netlify.app/.netlify/functions/chat \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer <token>" \
   -d '{"query":"What is R205(a) and how does it apply to C11?"}'
@@ -124,7 +124,7 @@ curl -X POST https://legal-immi-doc.netlify.app/.netlify/functions/chat \
 **Endpoint**: `POST /.netlify/functions/chat`
 
 ```bash
-curl -X POST https://legal-immi-doc.netlify.app/.netlify/functions/chat \
+curl -X POST https://your-site.netlify.app/.netlify/functions/chat \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer <token>" \
   -d '{"query":"How do I apply for Canadian citizenship?"}'
@@ -163,7 +163,7 @@ curl -X POST https://legal-immi-doc.netlify.app/.netlify/functions/chat \
 **Endpoint**: `POST /.netlify/functions/request-consultation`
 
 ```bash
-curl -X POST https://legal-immi-doc.netlify.app/.netlify/functions/request-consultation \
+curl -X POST https://your-site.netlify.app/.netlify/functions/request-consultation \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer <token>" \
   -d '{
@@ -206,7 +206,7 @@ curl -X POST https://legal-immi-doc.netlify.app/.netlify/functions/request-consu
 **Endpoint**: `POST /.netlify/functions/chat`
 
 ```bash
-curl -X POST https://legal-immi-doc.netlify.app/.netlify/functions/chat \
+curl -X POST https://your-site.netlify.app/.netlify/functions/chat \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer invalid_token" \
   -d '{"query":"test"}'
@@ -226,7 +226,7 @@ curl -X POST https://legal-immi-doc.netlify.app/.netlify/functions/chat \
 **Endpoint**: `POST /.netlify/functions/chat`
 
 ```bash
-curl -X POST https://legal-immi-doc.netlify.app/.netlify/functions/chat \
+curl -X POST https://your-site.netlify.app/.netlify/functions/chat \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer <token>" \
   -d '{}'

@@ -80,7 +80,7 @@ See [API_SPEC.md](./API_SPEC.md) for complete endpoint documentation.
 3. Set environment variables in Netlify UI
 4. Deploy!
 
-**Live Demo**: https://legal-immi-doc.netlify.app
+**Live Demo**: https://your-site.netlify.app
 
 ## 📄 License
 

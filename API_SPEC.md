@@ -1,6 +1,6 @@
 # Legal Knowledge Base API Specification
 
-**Base URL**: `https://legal-immi-doc.netlify.app`
+**Base URL**: `https://your-site.netlify.app`
 
 ---
 
@@ -228,7 +228,7 @@ Retrieves conversation messages or lists all user's conversations.
 
 #### List All Conversations (no `id` parameter)
 ```bash
-curl -X GET "https://legal-immi-doc.netlify.app/.netlify/functions/conversation" \
+curl -X GET "https://your-site.netlify.app/.netlify/functions/conversation" \
   -H "Authorization: Bearer <token>"
 ```
 
@@ -249,7 +249,7 @@ curl -X GET "https://legal-immi-doc.netlify.app/.netlify/functions/conversation"
 
 #### Get Messages for Specific Conversation
 ```bash
-curl -X GET "https://legal-immi-doc.netlify.app/.netlify/functions/conversation?id=uuid-xxx" \
+curl -X GET "https://your-site.netlify.app/.netlify/functions/conversation?id=uuid-xxx" \
   -H "Authorization: Bearer <token>"
 ```
 
@@ -300,7 +300,7 @@ Retrieves the user's past conversations **grouped by conversationId** with all m
 
 #### Example Request
 ```bash
-curl -X GET "https://legal-immi-doc.netlify.app/.netlify/functions/chat-history?limit=10" \
+curl -X GET "https://your-site.netlify.app/.netlify/functions/chat-history?limit=10" \
   -H "Authorization: Bearer <token>"
 ```
 
@@ -430,7 +430,7 @@ If `feeAcknowledged` is not `true`:
 ### JavaScript/React Native
 
 ```javascript
-const API_BASE = 'https://legal-immi-doc.netlify.app/.netlify/functions';
+const API_BASE = 'https://your-site.netlify.app/.netlify/functions';
 
 // Store token after login
 let authToken = null;
@@ -550,7 +550,7 @@ struct Metadata: Codable {
 }
 
 class LegalAPI {
-    static let baseURL = "https://legal-immi-doc.netlify.app/.netlify/functions"
+    static let baseURL = "https://your-site.netlify.app/.netlify/functions"
     var token: String?
     
     func login(email: String, password: String) async throws -> AuthResponse {
@@ -634,7 +634,7 @@ data class Metadata(
 )
 
 class LegalAPI {
-    private val baseUrl = "https://legal-immi-doc.netlify.app/.netlify/functions"
+    private val baseUrl = "https://your-site.netlify.app/.netlify/functions"
     var token: String? = null
     
     suspend fun login(email: String, password: String): AuthResponse = withContext(Dispatchers.IO) {
