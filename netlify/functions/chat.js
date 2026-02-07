@@ -1,31 +1,16 @@
-const { neon } = require("@neondatabase/serverless");
-const jwt = require("jsonwebtoken");
+const { corsHeaders, respond, handleMethodCheck, requireAuth, getDb, stripSourceCitations } = require("./shared");
 
 const SLIDING_WINDOW_SIZE = 10; // Last 10 messages for context (5 Q&A pairs)
-
-// Verify JWT token
-function verifyToken(authHeader) {
-    if (!authHeader || !authHeader.startsWith("Bearer ")) {
-        return null;
-    }
-    const token = authHeader.substring(7);
-    try {
-        return jwt.verify(token, process.env.JWT_SECRET);
-    } catch {
-        return null;
-    }
-}
 
 // Rewrite vague follow-up questions using conversation history
 async function rewriteQueryWithHistory(query, history, apiKey) {
     if (history.length === 0) return query;
 
-    // Check if query seems like a follow-up (short, contains pronouns like "it", "that", "this")
     const followUpIndicators = /^(what|how|why|can|is|are|does|do|tell|explain).{0,20}(it|that|this|they|them|those|the same)/i;
     const isShortQuery = query.split(' ').length < 8;
 
     if (!followUpIndicators.test(query) && !isShortQuery) {
-        return query; // Seems standalone, no rewrite needed
+        return query;
     }
 
     const historyText = history.map(m => `${m.role}: ${m.content.substring(0, 200)}`).join("\n");
@@ -38,7 +23,7 @@ async function rewriteQueryWithHistory(query, history, apiKey) {
                 "Content-Type": "application/json"
             },
             body: JSON.stringify({
-                model: "x-ai/grok-4.1-fast", // Lower cost for simple query rewriting
+                model: "x-ai/grok-4.1-fast",
                 messages: [
                     {
                         role: "system",
@@ -57,61 +42,32 @@ async function rewriteQueryWithHistory(query, history, apiKey) {
         return data.choices?.[0]?.message?.content?.trim() || query;
     } catch (error) {
         console.error("Query rewrite error:", error);
-        return query; // Fallback to original
+        return query;
     }
 }
 
 exports.handler = async (event) => {
     const startTime = Date.now();
+    const headers = corsHeaders("POST, OPTIONS");
 
-    // CORS headers
-    const headers = {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Headers": "Content-Type, Authorization",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Content-Type": "application/json",
-    };
+    const methodError = handleMethodCheck(event, "POST", headers);
+    if (methodError) return methodError;
 
-    if (event.httpMethod === "OPTIONS") {
-        return { statusCode: 200, headers, body: "" };
-    }
-
-    if (event.httpMethod !== "POST") {
-        return {
-            statusCode: 405,
-            headers,
-            body: JSON.stringify({ error: "Method not allowed" }),
-        };
-    }
-
-    // Verify authentication
-    const user = verifyToken(event.headers.authorization || event.headers.Authorization);
-    if (!user) {
-        return {
-            statusCode: 401,
-            headers,
-            body: JSON.stringify({ error: "Unauthorized" }),
-        };
-    }
+    const { user, errorResponse } = requireAuth(event, headers);
+    if (errorResponse) return errorResponse;
 
     try {
         const { query, conversationId } = JSON.parse(event.body);
 
         if (!query || query.trim() === "") {
-            return {
-                statusCode: 400,
-                headers,
-                body: JSON.stringify({ error: "Query is required" }),
-            };
+            return respond(400, headers, { error: "Query is required" });
         }
 
-        const sql = neon(process.env.DATABASE_URL);
+        const sql = getDb();
 
-        // 1. MANAGE CONVERSATION SESSION
+        // 1. Manage conversation session
         let currentConversationId = conversationId;
-
         if (!currentConversationId) {
-            // Create new conversation
             const convResult = await sql`
                 INSERT INTO conversations (user_id) VALUES (${user.userId}) 
                 RETURNING id
@@ -119,24 +75,21 @@ exports.handler = async (event) => {
             currentConversationId = convResult[0].id;
         }
 
-        // 2. LOAD CONVERSATION HISTORY (Sliding Window: Last 6 messages)
+        // 2. Load conversation history (sliding window: last 10 messages)
         const historyResult = await sql`
             SELECT role, content FROM messages 
             WHERE conversation_id = ${currentConversationId}
             ORDER BY created_at DESC 
             LIMIT ${SLIDING_WINDOW_SIZE}
         `;
-        // Reverse to chronological order (oldest -> newest)
         const conversationHistory = historyResult.reverse();
 
-        // 3. REWRITE QUERY if it seems like a follow-up
+        // 3. Rewrite query if it seems like a follow-up
         const standaloneQuery = await rewriteQueryWithHistory(
-            query,
-            conversationHistory,
-            process.env.OPENROUTER_API_KEY
+            query, conversationHistory, process.env.OPENROUTER_API_KEY
         );
 
-        // 4. Generate embedding for the (possibly rewritten) query
+        // 4. Generate embedding
         const embeddingResponse = await fetch("https://openrouter.ai/api/v1/embeddings", {
             method: "POST",
             headers: {
@@ -150,13 +103,8 @@ exports.handler = async (event) => {
         });
 
         if (!embeddingResponse.ok) {
-            const errorText = await embeddingResponse.text();
-            console.error("Embedding error:", errorText);
-            return {
-                statusCode: 500,
-                headers,
-                body: JSON.stringify({ error: "Failed to generate embedding" }),
-            };
+            console.error("Embedding error:", await embeddingResponse.text());
+            return respond(500, headers, { error: "Failed to generate embedding" });
         }
 
         const embeddingData = await embeddingResponse.json();
@@ -172,17 +120,18 @@ exports.handler = async (event) => {
             LIMIT 8
         `;
 
-        // 6. SAVE USER MESSAGE to conversation
+        // 6. Save user message to conversation
         await sql`
             INSERT INTO messages (conversation_id, role, content)
             VALUES (${currentConversationId}, 'user', ${query})
         `;
 
+        const modelName = "x-ai/grok-4.1-fast";
+
+        // 7. Handle no results
         if (results.length === 0) {
             const responseTime = Date.now() - startTime;
-            const modelName = "x-ai/grok-4.1-fast";
 
-            // Standard format response for no results
             const noResultsAnswer = {
                 summary: "I couldn't find sufficient information in my knowledge base to fully answer your question.",
                 keyPoints: [],
@@ -192,41 +141,34 @@ exports.handler = async (event) => {
                 confidence: "low"
             };
 
-            // Save assistant response to messages
             await sql`
                 INSERT INTO messages (conversation_id, role, content, sources)
                 VALUES (${currentConversationId}, 'assistant', ${JSON.stringify(noResultsAnswer)}, ${JSON.stringify([])})
             `;
-
-            // Log full interaction to interactions table
             await sql`
                 INSERT INTO interactions (user_id, query, answer, sources, model, response_time_ms)
                 VALUES (${user.userId}, ${query}, ${JSON.stringify(noResultsAnswer)}, ${JSON.stringify([])}, ${modelName}, ${responseTime})
             `;
 
-            return {
-                statusCode: 200,
-                headers,
-                body: JSON.stringify({
-                    success: true,
-                    conversationId: currentConversationId,
-                    data: noResultsAnswer,
-                    sources: [],
-                    consultationAvailable: true,
-                    consultationPrompt: "Would you like to speak with a legal professional? We can connect you with an immigration lawyer who specializes in C11 work permits. Please note that professional consultation fees may apply.",
-                    metadata: {
-                        query,
-                        rewrittenQuery: standaloneQuery !== query ? standaloneQuery : null,
-                        model: modelName,
-                        responseTimeMs: responseTime,
-                        documentsFound: 0,
-                        conversationLength: conversationHistory.length + 1
-                    }
-                }),
-            };
+            return respond(200, headers, {
+                success: true,
+                conversationId: currentConversationId,
+                data: noResultsAnswer,
+                sources: [],
+                consultationAvailable: true,
+                consultationPrompt: "Would you like to speak with a legal professional? We can connect you with an immigration lawyer who specializes in C11 work permits. Please note that professional consultation fees may apply.",
+                metadata: {
+                    query,
+                    rewrittenQuery: standaloneQuery !== query ? standaloneQuery : null,
+                    model: modelName,
+                    responseTimeMs: responseTime,
+                    documentsFound: 0,
+                    conversationLength: conversationHistory.length + 1
+                }
+            });
         }
 
-        // 7. Build context from search results
+        // 8. Build context from search results
         const context = results
             .map((r, i) => `[Source ${i + 1}] ${r.filename} (${r.section}):\n${r.content}`)
             .join("\n\n---\n\n");
@@ -240,7 +182,7 @@ exports.handler = async (event) => {
                 r.section === "ATIP Notes" ? "atip_note" : "policy_document"
         }));
 
-        // 8. Build messages array with sliding window history
+        // 9. Build LLM messages with sliding window history
         const llmMessages = [
             {
                 role: "system",
@@ -271,7 +213,6 @@ SOLUTION-ORIENTED RULES:
             }
         ];
 
-        // Add conversation history (sliding window)
         for (const msg of conversationHistory) {
             llmMessages.push({
                 role: msg.role,
@@ -281,21 +222,12 @@ SOLUTION-ORIENTED RULES:
             });
         }
 
-        // Add current query with context
         llmMessages.push({
             role: "user",
-            content: `Based on the following legal documents, answer this question:
-
-QUESTION: ${query}
-
-CONTEXT FROM LEGAL DOCUMENTS:
-${context}
-
-Remember to respond with ONLY the JSON structure specified.`
+            content: `Based on the following legal documents, answer this question:\n\nQUESTION: ${query}\n\nCONTEXT FROM LEGAL DOCUMENTS:\n${context}\n\nRemember to respond with ONLY the JSON structure specified.`
         });
 
-        // 9. Generate answer using LLM with reasoning
-        const modelName = "x-ai/grok-4.1-fast";
+        // 10. Generate answer using LLM with reasoning
         const chatResponse = await fetch("https://openrouter.ai/api/v1/chat/completions", {
             method: "POST",
             headers: {
@@ -313,19 +245,14 @@ Remember to respond with ONLY the JSON structure specified.`
         });
 
         if (!chatResponse.ok) {
-            const errorText = await chatResponse.text();
-            console.error("Chat error:", errorText);
-            return {
-                statusCode: 500,
-                headers,
-                body: JSON.stringify({ error: "Failed to generate response" }),
-            };
+            console.error("Chat error:", await chatResponse.text());
+            return respond(500, headers, { error: "Failed to generate response" });
         }
 
         const chatData = await chatResponse.json();
         const rawAnswer = chatData.choices[0].message.content;
 
-        // Parse the structured response
+        // 11. Parse structured response
         let structuredAnswer;
         try {
             const cleanJson = rawAnswer.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
@@ -343,30 +270,17 @@ Remember to respond with ONLY the JSON structure specified.`
 
         const responseTime = Date.now() - startTime;
 
-        // 10. SAVE ASSISTANT MESSAGE to conversation (with source citations)
+        // 12. Save to database (with source citations)
         await sql`
             INSERT INTO messages (conversation_id, role, content, sources)
             VALUES (${currentConversationId}, 'assistant', ${JSON.stringify(structuredAnswer)}, ${JSON.stringify(sources)})
         `;
-
-        // 11. Log interaction for analytics (with source citations)
         await sql`
             INSERT INTO interactions (user_id, query, answer, sources, model, response_time_ms)
             VALUES (${user.userId}, ${query}, ${JSON.stringify(structuredAnswer)}, ${JSON.stringify(sources)}, ${modelName}, ${responseTime})
         `;
 
-        // 12. Strip [Source X] citations from API response (keep clean for mobile app)
-        const stripSourceCitations = (text) => {
-            if (!text) return text;
-            return text
-                .replace(/\s*\[Source\s*\d+(?:\s*,\s*Source\s*\d+)*\]/gi, '')  // [Source 1, Source 5]
-                .replace(/\s*\[Sources?\s*[\d,\s]+\]/gi, '')                    // [Source 1, 2, 3]
-                .replace(/\s*\[Source\s*\d+\]/gi, '')                           // [Source 1]
-                .replace(/\s+([.,])/g, '$1')                                    // Fix spacing before punctuation
-                .replace(/\s{2,}/g, ' ')                                        // Remove double spaces
-                .trim();
-        };
-
+        // 13. Strip source citations for clean API response
         const cleanAnswer = {
             ...structuredAnswer,
             summary: stripSourceCitations(structuredAnswer.summary),
@@ -375,38 +289,29 @@ Remember to respond with ONLY the JSON structure specified.`
             keyPoints: (structuredAnswer.keyPoints || []).map(stripSourceCitations)
         };
 
-        // Determine if consultation should be offered
         const confidence = structuredAnswer.confidence || "medium";
         const offerConsultation = confidence === "low" || confidence === "medium";
 
-        return {
-            statusCode: 200,
-            headers,
-            body: JSON.stringify({
-                success: true,
-                conversationId: currentConversationId,
-                data: cleanAnswer,
-                sources,
-                consultationAvailable: offerConsultation,
-                consultationPrompt: offerConsultation
-                    ? "Need more detailed guidance? Connect with our legal team for personalized consultation. Professional fees may apply."
-                    : null,
-                metadata: {
-                    query,
-                    rewrittenQuery: standaloneQuery !== query ? standaloneQuery : null,
-                    model: modelName,
-                    responseTimeMs: responseTime,
-                    documentsFound: sources.length,
-                    conversationLength: conversationHistory.length + 1
-                }
-            }),
-        };
+        return respond(200, headers, {
+            success: true,
+            conversationId: currentConversationId,
+            data: cleanAnswer,
+            sources,
+            consultationAvailable: offerConsultation,
+            consultationPrompt: offerConsultation
+                ? "Need more detailed guidance? Connect with our legal team for personalized consultation. Professional fees may apply."
+                : null,
+            metadata: {
+                query,
+                rewrittenQuery: standaloneQuery !== query ? standaloneQuery : null,
+                model: modelName,
+                responseTimeMs: responseTime,
+                documentsFound: sources.length,
+                conversationLength: conversationHistory.length + 1
+            }
+        });
     } catch (error) {
         console.error("Chat error:", error);
-        return {
-            statusCode: 500,
-            headers,
-            body: JSON.stringify({ error: "Internal server error" }),
-        };
+        return respond(500, headers, { error: "Internal server error" });
     }
 };

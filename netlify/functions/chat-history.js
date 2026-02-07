@@ -1,50 +1,21 @@
-const { neon } = require("@neondatabase/serverless");
-const jwt = require("jsonwebtoken");
-
-// Verify JWT token
-function verifyToken(authHeader) {
-    if (!authHeader || !authHeader.startsWith("Bearer ")) {
-        return null;
-    }
-    const token = authHeader.substring(7);
-    try {
-        return jwt.verify(token, process.env.JWT_SECRET);
-    } catch {
-        return null;
-    }
-}
+const { corsHeaders, respond, handleMethodCheck, requireAuth, getDb } = require("./shared");
 
 exports.handler = async (event) => {
-    const headers = {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Headers": "Content-Type, Authorization",
-        "Access-Control-Allow-Methods": "GET, OPTIONS",
-        "Content-Type": "application/json",
-    };
+    const headers = corsHeaders("GET, OPTIONS");
 
-    if (event.httpMethod === "OPTIONS") {
-        return { statusCode: 200, headers, body: "" };
-    }
+    const methodError = handleMethodCheck(event, "GET", headers);
+    if (methodError) return methodError;
 
-    if (event.httpMethod !== "GET") {
-        return { statusCode: 405, headers, body: JSON.stringify({ error: "Method not allowed" }) };
-    }
-
-    // Verify authentication
-    const user = verifyToken(event.headers.authorization || event.headers.Authorization);
-    if (!user) {
-        return { statusCode: 401, headers, body: JSON.stringify({ error: "Unauthorized" }) };
-    }
+    const { user, errorResponse } = requireAuth(event, headers);
+    if (errorResponse) return errorResponse;
 
     try {
-        const sql = neon(process.env.DATABASE_URL);
-
-        // Parse query parameters
+        const sql = getDb();
         const params = event.queryStringParameters || {};
-        const limit = Math.min(parseInt(params.limit) || 20, 50); // Limit conversations, not messages
+        const limit = Math.min(parseInt(params.limit) || 20, 50);
         const offset = parseInt(params.offset) || 0;
 
-        // Get user's conversations with their messages grouped
+        // Get conversations with grouped messages
         const conversations = await sql`
             SELECT 
                 c.id as conversation_id,
@@ -70,24 +41,20 @@ exports.handler = async (event) => {
             OFFSET ${offset}
         `;
 
-        // Get total count of conversations
         const countResult = await sql`
             SELECT COUNT(*) as total FROM conversations WHERE user_id = ${user.userId}
         `;
         const total = parseInt(countResult[0].total);
 
-        // Format response - group messages within each conversation
+        // Format response
         const history = conversations.map(conv => {
-            // Parse messages content
             const messages = (conv.messages || []).map(msg => {
                 let parsedContent = msg.content;
                 try {
                     if (typeof msg.content === 'string' && msg.content.startsWith('{')) {
                         parsedContent = JSON.parse(msg.content);
                     }
-                } catch (e) {
-                    // Keep as string
-                }
+                } catch (e) { /* Keep as string */ }
                 return {
                     role: msg.role,
                     content: parsedContent,
@@ -101,30 +68,17 @@ exports.handler = async (event) => {
                 firstQuery: conv.first_query,
                 messageCount: parseInt(conv.message_count),
                 startedAt: conv.conversation_started,
-                messages: messages
+                messages
             };
         });
 
-        return {
-            statusCode: 200,
-            headers,
-            body: JSON.stringify({
-                success: true,
-                conversations: history,
-                pagination: {
-                    total,
-                    limit,
-                    offset,
-                    hasMore: offset + limit < total
-                }
-            }),
-        };
+        return respond(200, headers, {
+            success: true,
+            conversations: history,
+            pagination: { total, limit, offset, hasMore: offset + limit < total }
+        });
     } catch (error) {
         console.error("Chat history error:", error);
-        return {
-            statusCode: 500,
-            headers,
-            body: JSON.stringify({ error: "Failed to retrieve chat history" }),
-        };
+        return respond(500, headers, { error: "Failed to retrieve chat history" });
     }
 };

@@ -1,49 +1,20 @@
-const { neon } = require("@neondatabase/serverless");
-const jwt = require("jsonwebtoken");
-
-// Verify JWT token
-function verifyToken(authHeader) {
-    if (!authHeader || !authHeader.startsWith("Bearer ")) {
-        return null;
-    }
-    const token = authHeader.substring(7);
-    try {
-        return jwt.verify(token, process.env.JWT_SECRET);
-    } catch {
-        return null;
-    }
-}
+const { corsHeaders, respond, handleMethodCheck, requireAuth, getDb } = require("./shared");
 
 exports.handler = async (event) => {
-    const headers = {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Headers": "Content-Type, Authorization",
-        "Access-Control-Allow-Methods": "GET, OPTIONS",
-        "Content-Type": "application/json",
-    };
+    const headers = corsHeaders("GET, OPTIONS");
 
-    if (event.httpMethod === "OPTIONS") {
-        return { statusCode: 200, headers, body: "" };
-    }
+    const methodError = handleMethodCheck(event, "GET", headers);
+    if (methodError) return methodError;
 
-    if (event.httpMethod !== "GET") {
-        return { statusCode: 405, headers, body: JSON.stringify({ error: "Method not allowed" }) };
-    }
-
-    // Verify authentication
-    const user = verifyToken(event.headers.authorization || event.headers.Authorization);
-    if (!user) {
-        return { statusCode: 401, headers, body: JSON.stringify({ error: "Unauthorized" }) };
-    }
+    const { user, errorResponse } = requireAuth(event, headers);
+    if (errorResponse) return errorResponse;
 
     try {
-        const sql = neon(process.env.DATABASE_URL);
-
-        // Get conversationId from query params
+        const sql = getDb();
         const conversationId = event.queryStringParameters?.id;
 
         if (!conversationId) {
-            // If no conversationId, return list of user's conversations
+            // List all conversations
             const conversations = await sql`
                 SELECT c.id, c.created_at, 
                        (SELECT content FROM messages WHERE conversation_id = c.id AND role = 'user' ORDER BY created_at LIMIT 1) as first_query,
@@ -54,19 +25,15 @@ exports.handler = async (event) => {
                 LIMIT 20
             `;
 
-            return {
-                statusCode: 200,
-                headers,
-                body: JSON.stringify({
-                    success: true,
-                    conversations: conversations.map(c => ({
-                        id: c.id,
-                        firstQuery: c.first_query,
-                        messageCount: parseInt(c.message_count),
-                        createdAt: c.created_at
-                    }))
-                }),
-            };
+            return respond(200, headers, {
+                success: true,
+                conversations: conversations.map(c => ({
+                    id: c.id,
+                    firstQuery: c.first_query,
+                    messageCount: parseInt(c.message_count),
+                    createdAt: c.created_at
+                }))
+            });
         }
 
         // Verify conversation belongs to user
@@ -76,14 +43,10 @@ exports.handler = async (event) => {
         `;
 
         if (convCheck.length === 0) {
-            return {
-                statusCode: 404,
-                headers,
-                body: JSON.stringify({ error: "Conversation not found" }),
-            };
+            return respond(404, headers, { error: "Conversation not found" });
         }
 
-        // Get all messages for the conversation
+        // Get all messages
         const messages = await sql`
             SELECT role, content, sources, created_at
             FROM messages 
@@ -91,16 +54,13 @@ exports.handler = async (event) => {
             ORDER BY created_at ASC
         `;
 
-        // Parse content and format response
         const formattedMessages = messages.map(msg => {
             let parsedContent = msg.content;
             try {
                 if (typeof msg.content === 'string' && msg.content.startsWith('{')) {
                     parsedContent = JSON.parse(msg.content);
                 }
-            } catch (e) {
-                // Keep as string if parsing fails
-            }
+            } catch (e) { /* Keep as string */ }
 
             return {
                 role: msg.role,
@@ -110,22 +70,14 @@ exports.handler = async (event) => {
             };
         });
 
-        return {
-            statusCode: 200,
-            headers,
-            body: JSON.stringify({
-                success: true,
-                conversationId: conversationId,
-                messageCount: messages.length,
-                messages: formattedMessages
-            }),
-        };
+        return respond(200, headers, {
+            success: true,
+            conversationId,
+            messageCount: messages.length,
+            messages: formattedMessages
+        });
     } catch (error) {
         console.error("Conversation error:", error);
-        return {
-            statusCode: 500,
-            headers,
-            body: JSON.stringify({ error: "Failed to retrieve conversation" }),
-        };
+        return respond(500, headers, { error: "Failed to retrieve conversation" });
     }
 };

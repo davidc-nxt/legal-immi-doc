@@ -1,19 +1,5 @@
-const { neon } = require("@neondatabase/serverless");
-const jwt = require("jsonwebtoken");
 const { Resend } = require("resend");
-
-// Verify JWT token
-function verifyToken(authHeader) {
-    if (!authHeader || !authHeader.startsWith("Bearer ")) {
-        return null;
-    }
-    const token = authHeader.substring(7);
-    try {
-        return jwt.verify(token, process.env.JWT_SECRET);
-    } catch {
-        return null;
-    }
-}
+const { corsHeaders, respond, handleMethodCheck, requireAuth, getDb } = require("./shared");
 
 // Generate summary of conversation using Grok
 async function generateConversationSummary(interactions, apiKey) {
@@ -68,59 +54,38 @@ Keep the summary professional and under 300 words.`
 }
 
 exports.handler = async (event) => {
-    const headers = {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Headers": "Content-Type, Authorization",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Content-Type": "application/json",
-    };
+    const headers = corsHeaders("POST, OPTIONS");
 
-    if (event.httpMethod === "OPTIONS") {
-        return { statusCode: 200, headers, body: "" };
-    }
+    const methodError = handleMethodCheck(event, "POST", headers);
+    if (methodError) return methodError;
 
-    if (event.httpMethod !== "POST") {
-        return { statusCode: 405, headers, body: JSON.stringify({ error: "Method not allowed" }) };
-    }
-
-    // Verify authentication
-    const user = verifyToken(event.headers.authorization || event.headers.Authorization);
-    if (!user) {
-        return { statusCode: 401, headers, body: JSON.stringify({ error: "Unauthorized" }) };
-    }
+    const { user, errorResponse } = requireAuth(event, headers);
+    if (errorResponse) return errorResponse;
 
     try {
         const { contactEmail, contactPhone, chatHistory, originalQuery, additionalNotes, feeAcknowledged } = JSON.parse(event.body);
 
-        // Validation - must acknowledge fees first
+        // Must acknowledge fees first
         if (!feeAcknowledged) {
-            return {
-                statusCode: 400,
-                headers,
-                body: JSON.stringify({
-                    error: "Fee acknowledgment required",
-                    requiresAcknowledgment: true,
-                    feeDisclosure: "Professional legal consultation may incur fees. By proceeding, you acknowledge that fees may apply and our team will discuss pricing before any chargeable work begins.",
-                    action: "Please set feeAcknowledged to true to confirm you understand fees may apply."
-                }),
-            };
+            return respond(400, headers, {
+                error: "Fee acknowledgment required",
+                requiresAcknowledgment: true,
+                feeDisclosure: "Professional legal consultation may incur fees. By proceeding, you acknowledge that fees may apply and our team will discuss pricing before any chargeable work begins.",
+                action: "Please set feeAcknowledged to true to confirm you understand fees may apply."
+            });
         }
 
         if (!contactEmail || !contactPhone) {
-            return {
-                statusCode: 400,
-                headers,
-                body: JSON.stringify({ error: "Contact email and phone are required" }),
-            };
+            return respond(400, headers, { error: "Contact email and phone are required" });
         }
 
-        const sql = neon(process.env.DATABASE_URL);
+        const sql = getDb();
 
         // Get user details
         const users = await sql`SELECT email, name FROM users WHERE id = ${user.userId}`;
         const userData = users[0] || { email: user.email, name: "Unknown" };
 
-        // Fetch ALL user's past interactions from database
+        // Fetch ALL user's past interactions
         const allInteractions = await sql`
             SELECT query, answer, sources, created_at 
             FROM interactions 
@@ -128,13 +93,12 @@ exports.handler = async (event) => {
             ORDER BY created_at ASC
         `;
 
-        // Generate LLM summary of the entire conversation history
+        // Generate LLM summary
         const llmSummary = await generateConversationSummary(
-            allInteractions,
-            process.env.OPENROUTER_API_KEY
+            allInteractions, process.env.OPENROUTER_API_KEY
         );
 
-        // Store consultation request in database
+        // Store consultation request
         const consultationResult = await sql`
             INSERT INTO consultations (user_id, contact_email, contact_phone, original_query, chat_history, additional_notes, status)
             VALUES (${user.userId}, ${contactEmail}, ${contactPhone}, ${originalQuery || ""}, ${JSON.stringify(allInteractions)}, ${additionalNotes || ""}, 'pending')
@@ -142,7 +106,7 @@ exports.handler = async (event) => {
         `;
         const consultation = consultationResult[0];
 
-        // Format full conversation history for email
+        // Format conversation history for email
         const fullConversation = allInteractions.map((interaction, i) => {
             const answer = typeof interaction.answer === 'string' ?
                 (interaction.answer.startsWith('{') ? JSON.parse(interaction.answer) : { details: interaction.answer }) :
@@ -167,9 +131,8 @@ exports.handler = async (event) => {
             `;
         }).join('');
 
-        // Send email to admin lawyer via Resend
+        // Send email via Resend
         const resend = new Resend(process.env.RESEND_API_KEY);
-
         const emailResult = await resend.emails.send({
             from: process.env.RESEND_FROM_EMAIL,
             to: process.env.ADMIN_EMAIL,
@@ -247,23 +210,15 @@ exports.handler = async (event) => {
             WHERE id = ${consultation.id}
         `;
 
-        return {
-            statusCode: 200,
-            headers,
-            body: JSON.stringify({
-                success: true,
-                message: "Your consultation request has been submitted. Our legal team will contact you within 1-2 business days.",
-                consultationId: consultation.id,
-                interactionsIncluded: allInteractions.length,
-                feeNotice: "Please note that professional legal consultation may incur fees. Our team will discuss pricing before any chargeable work begins."
-            }),
-        };
+        return respond(200, headers, {
+            success: true,
+            message: "Your consultation request has been submitted. Our legal team will contact you within 1-2 business days.",
+            consultationId: consultation.id,
+            interactionsIncluded: allInteractions.length,
+            feeNotice: "Please note that professional legal consultation may incur fees. Our team will discuss pricing before any chargeable work begins."
+        });
     } catch (error) {
         console.error("Consultation request error:", error);
-        return {
-            statusCode: 500,
-            headers,
-            body: JSON.stringify({ error: "Failed to submit consultation request" }),
-        };
+        return respond(500, headers, { error: "Failed to submit consultation request" });
     }
 };
